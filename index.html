@@ -443,10 +443,18 @@
     
     async function shareScreen() {
         try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({video:true});
-            addVideoCard(stream, true, "Your Screen", "screen-share");
-            // Note: Actual screen share broadcasting requires re-negotiating connection or 2nd peer call
-        } catch(e) {}
+            const stream = await navigator.mediaDevices.getDisplayMedia({video:{mediaSource:'screen'}, audio:true});
+            const screenStream = stream;
+            addVideoCard(screenStream, true, "Your Screen", "screen-share");
+
+            // Broadcast screen share to peers
+            for (let peerId in peers) {
+                const screenCall = peer.call(peerId, screenStream, { metadata: { name: "Screen Share", type: "screen" } });
+                // Store the screen call if needed, but for simplicity, let it run
+            }
+        } catch(e) {
+            console.log('Screen share cancelled or failed');
+        }
     }
     
     function toggleLayout() {
