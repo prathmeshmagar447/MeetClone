@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus Meet</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #09090b;
+            --glass: rgba(20, 20, 23, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --primary: #6366f1;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --text: #ffffff;
+            --text-muted: #a1a1aa;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; outline: none; font-family: 'Inter', sans-serif; }
+        
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text);
+            height: 100vh;
+            overflow: hidden;
+            background-image: radial-gradient(circle at 15% 50%, rgba(99, 102, 241, 0.15), transparent 25%),
+                              radial-gradient(circle at 85% 30%, rgba(239, 68, 68, 0.1), transparent 25%);
+        }
+
+        /* --- ICONS --- */
+        .icon { font-family: 'Material Symbols Rounded'; font-size: 24px; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .icon-fill { font-variation-settings: 'FILL' 1; }
+
+        /* --- 1. LOBBY UI --- */
+        #lobby-layer {
+            position: fixed; inset: 0; z-index: 50;
+            display: flex; align-items: center; justify-content: center;
+            backdrop-filter: blur(20px);
+            background: rgba(0,0,0,0.4);
+            animation: fadeIn 0.5s ease;
+        }
+
+        .lobby-card {
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            padding: 40px;
+            border-radius: 24px;
+            width: 90%; max-width: 480px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+        }
+
+        .lobby-preview {
+            width: 100%; aspect-ratio: 16/9; background: #000;
+            border-radius: 16px; overflow: hidden; margin-bottom: 24px;
+            position: relative;
+        }
+        .lobby-preview video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+        
+        .lobby-controls {
+            position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 12px;
+            background: rgba(0,0,0,0.6); padding: 8px; border-radius: 50px;
+            backdrop-filter: blur(8px);
+        }
+
+        .input-box {
+            background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border);
+            padding: 14px; border-radius: 12px; color: white; width: 100%;
+            font-size: 1rem; margin-bottom: 12px; transition: 0.2s;
+        }
+        .input-box:focus { border-color: var(--primary); background: rgba(255,255,255,0.08); }
+
+        .btn-primary {
+            background: var(--primary); color: white; border: none;
+            width: 100%; padding: 14px; border-radius: 12px;
+            font-weight: 600; font-size: 1rem; cursor: pointer;
+            transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+
+        /* --- 2. APP UI --- */
+        #app-layer { display: none; height: 100%; flex-direction: column; }
+
+        /* Header */
+        header {
+            height: 60px; display: flex; align-items: center; justify-content: space-between;
+            padding: 0 24px; z-index: 10;
+        }
+        .badge { 
+            background: rgba(255,255,255,0.1); padding: 6px 12px; border-radius: 20px; 
+            font-size: 0.85rem; display: flex; align-items: center; gap: 6px; 
+        }
+        .rec-dot { width: 8px; height: 8px; background: var(--danger); border-radius: 50%; animation: pulse 2s infinite; }
+
+        /* Main Grid */
+        .stage {
+            flex: 1; padding: 20px;
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px; overflow-y: auto;
+        }
+
+        .user-card {
+            position: relative; background: #1c1c1f; border-radius: 16px; overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            aspect-ratio: 16/9; transition: all 0.3s ease;
+        }
+        .user-card video { width: 100%; height: 100%; object-fit: cover; }
+        .user-card.local video { transform: scaleX(-1); }
+
+        .user-info {
+            position: absolute; bottom: 16px; left: 16px;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+            padding: 6px 12px; border-radius: 8px;
+            font-size: 0.85rem; font-weight: 500; display: flex; align-items: center; gap: 6px;
+        }
+
+        /* Floating Dock */
+        .dock-container {
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 12px; padding: 12px 24px;
+            background: var(--glass); backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border); border-radius: 24px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2);
+            z-index: 20;
+        }
+
+        .dock-btn {
+            width: 44px; height: 44px; border-radius: 12px; border: none;
+            background: transparent; color: var(--text);
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s; position: relative;
+        }
+        .dock-btn:hover { background: rgba(255,255,255,0.1); transform: translateY(-4px); }
+        .dock-btn.active { background: var(--text); color: var(--bg-dark); } /* Toggle State */
+        .dock-btn.danger { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        .dock-btn.danger:hover { background: var(--danger); color: white; }
+        
+        /* Tooltip */
+        .dock-btn::after {
+            content: attr(data-tooltip);
+            position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%);
+            background: #000; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem;
+            opacity: 0; pointer-events: none; transition: 0.2s; white-space: nowrap;
+        }
+        .dock-btn:hover::after { opacity: 1; bottom: 55px; }
+
+        /* Sidebar */
+        .sidebar {
+            position: fixed; right: 20px; top: 80px; bottom: 100px; width: 320px;
+            background: var(--glass); backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border); border-radius: 16px;
+            transform: translateX(120%); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex; flex-direction: column; z-index: 15;
+        }
+        .sidebar.open { transform: translateX(0); }
+        
+        .sidebar-header { padding: 16px; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center; }
+        .chat-area { flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+        .chat-msg { background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; font-size: 0.9rem; }
+        .chat-input-wrap { padding: 16px; border-top: 1px solid var(--glass-border); }
+
+        /* Toast */
+        .toast {
+            position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-100px);
+            background: var(--text); color: var(--bg-dark); padding: 10px 20px;
+            border-radius: 50px; font-weight: 500; opacity: 0; transition: 0.3s; z-index: 100;
+        }
+        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+        /* Animations */
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <div id="lobby-layer">
+        <div class="lobby-card">
+            <h2 style="margin-bottom: 20px;">Nexus Meet</h2>
+            <div class="lobby-preview">
+                <video id="lobbyVid" autoplay playsinline muted></video>
+                <div class="lobby-controls">
+                    <button class="dock-btn active" id="btn-lobby-mic" onclick="toggleLobby('audio')">
+                        <span class="icon icon-fill">mic</span>
+                    </button>
+                    <button class="dock-btn active" id="btn-lobby-cam" onclick="toggleLobby('video')">
+                        <span class="icon icon-fill">videocam</span>
+                    </button>
+                </div>
+            </div>
+            
+            <input type="text" id="username" class="input-box" placeholder="Your Name" value="Guest">
+            <input type="text" id="code-input" class="input-box" placeholder="Enter Meeting Code (Optional)">
+            
+            <button class="btn-primary" onclick="joinMeeting()">
+                Join Meeting <span class="icon">arrow_forward</span>
+            </button>
+        </div>
+    </div>
+
+    <div id="app-layer">
+        <header>
+            <div style="font-weight: 600; display:flex; align-items:center; gap:10px;">
+                <span class="icon icon-fill" style="color:var(--primary)">bolt</span> Nexus
+            </div>
+            <div style="display:flex; gap: 15px;">
+                <div class="badge"><div class="rec-dot"></div> REC</div>
+                <div class="badge"><span class="icon" style="font-size:16px">wifi</span> HD</div>
+                <div class="badge" id="clock">00:00</div>
+            </div>
+        </header>
+
+        <div class="stage" id="grid">
+            </div>
+
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <span>Meeting Chat</span>
+                <button class="dock-btn" onclick="toggleSidebar()" style="width:30px; height:30px;"><span class="icon">close</span></button>
+            </div>
+            <div class="chat-area" id="chat-feed">
+                <div style="text-align:center; color:var(--text-muted); font-size:0.8rem; margin-top:20px;">
+                    Messages are encrypted end-to-end.
+                </div>
+            </div>
+            <div class="chat-input-wrap">
+                <input type="text" id="chat-input" class="input-box" placeholder="Type a message..." style="margin:0;" onkeypress="sendChat(event)">
+            </div>
+        </aside>
+
+        <div class="dock-container">
+            <button class="dock-btn active" id="btn-mic" onclick="toggleMedia('audio')" data-tooltip="Microphone">
+                <span class="icon icon-fill">mic</span>
+            </button>
+            <button class="dock-btn active" id="btn-cam" onclick="toggleMedia('video')" data-tooltip="Camera">
+                <span class="icon icon-fill">videocam</span>
+            </button>
+            <div style="width:1px; height:24px; background:var(--glass-border); margin:0 8px;"></div>
+            
+            <button class="dock-btn" onclick="shareScreen()" id="btn-screen" data-tooltip="Share Screen">
+                <span class="icon">present_to_all</span>
+            </button>
+            <button class="dock-btn" onclick="toggleSidebar()" data-tooltip="Chat">
+                <span class="icon">chat_bubble</span>
+            </button>
+            <button class="dock-btn" onclick="copyInvite()" data-tooltip="Invite Info">
+                <span class="icon">link</span>
+            </button>
+            <button class="dock-btn" onclick="toggleLayout()" data-tooltip="Change Layout">
+                <span class="icon">grid_view</span>
+            </button>
+            
+            <div style="width:1px; height:24px; background:var(--glass-border); margin:0 8px;"></div>
+            <button class="dock-btn danger" onclick="location.reload()" data-tooltip="Leave">
+                <span class="icon">call_end</span>
+            </button>
+        </div>
+    </div>
+
+    <div class="toast" id="toast">Link Copied!</div>
+
+<script>
+    // --- STATE ---
+    const peer = new Peer();
+    let myStream;
+    let myId;
+    let peers = {};
+    let config = { audio: true, video: true };
+    
+    // --- CLOCK ---
+    setInterval(() => {
+        document.getElementById('clock').innerText = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    }, 1000);
+
+    // --- 1. LOBBY SETUP ---
+    async function init() {
+        try {
+            myStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            document.getElementById('lobbyVid').srcObject = myStream;
+            
+            // Auto-fill code from URL
+            const urlParams = new URLSearchParams(window.location.search);
+            if(urlParams.get('join')) document.getElementById('code-input').value = urlParams.get('join');
+            
+        } catch(e) {
+            alert("Please allow Camera/Mic access to use Nexus Meet.");
+        }
+    }
+    init();
+
+    function toggleLobby(type) {
+        config[type] = !config[type];
+        
+        // Track
+        const track = type === 'audio' ? myStream.getAudioTracks()[0] : myStream.getVideoTracks()[0];
+        track.enabled = config[type];
+        
+        // UI
+        const btn = document.getElementById(`btn-lobby-${type === 'audio' ? 'mic' : 'cam'}`);
+        const icon = btn.querySelector('.icon');
+        
+        if(config[type]) {
+            btn.classList.add('active');
+            btn.style.color = '';
+            icon.innerText = type === 'audio' ? 'mic' : 'videocam';
+        } else {
+            btn.classList.remove('active');
+            btn.style.color = 'var(--danger)';
+            icon.innerText = type === 'audio' ? 'mic_off' : 'videocam_off';
+        }
+    }
+
+    // --- 2. JOIN MEETING ---
+    function joinMeeting() {
+        const name = document.getElementById('username').value || 'User';
+        const code = document.getElementById('code-input').value.trim();
+
+        document.getElementById('lobby-layer').style.display = 'none';
+        document.getElementById('app-layer').style.display = 'flex';
+        
+        // Add Self
+        addVideoCard(myStream, true, name, 'local');
+        syncDockButtons(); // Ensure App buttons match Lobby choice
+
+        if(!myId) {
+            peer.on('open', id => {
+                myId = id;
+                if(code) connectToPeer(code, name);
+            });
+        } else {
+            if(code) connectToPeer(code, name);
+        }
+    }
+
+    // --- 3. PEER LOGIC ---
+    peer.on('open', id => myId = id);
+    
+    peer.on('call', call => {
+        call.answer(myStream);
+        handleCall(call);
+    });
+
+    function connectToPeer(id, name) {
+        const call = peer.call(id, myStream, { metadata: { name: name } });
+        handleCall(call);
+    }
+
+    function handleCall(call) {
+        call.on('stream', remoteStream => {
+            if(!peers[call.peer]) {
+                peers[call.peer] = call;
+                const name = call.metadata?.name || "Participant";
+                addVideoCard(remoteStream, false, name, call.peer);
+            }
+        });
+        call.on('close', () => {
+            document.getElementById(`card-${call.peer}`).remove();
+            delete peers[call.peer];
+        });
+    }
+
+    // --- 4. UI FUNCTIONS ---
+    function addVideoCard(stream, isLocal, name, id) {
+        const div = document.createElement('div');
+        div.className = `user-card ${isLocal ? 'local' : ''}`;
+        div.id = `card-${id}`;
+        div.innerHTML = `
+            <video autoplay playsinline ${isLocal ? 'muted' : ''}></video>
+            <div class="user-info">
+                <span class="icon" style="font-size:14px; color:${isLocal?'var(--primary)':'var(--success)'}">circle</span>
+                ${name}
+            </div>
+        `;
+        div.querySelector('video').srcObject = stream;
+        document.getElementById('grid').appendChild(div);
+    }
+
+    function syncDockButtons() {
+        // Apply lobby choices to dock
+        const micBtn = document.getElementById('btn-mic');
+        const camBtn = document.getElementById('btn-cam');
+        
+        updateBtnState(micBtn, config.audio, 'mic');
+        updateBtnState(camBtn, config.video, 'videocam');
+    }
+
+    function toggleMedia(type) {
+        toggleLobby(type); // Reuse logic (updates track + config)
+        
+        // Update Dock UI
+        const btn = document.getElementById(`btn-${type === 'audio' ? 'mic' : 'cam'}`);
+        const iconName = type === 'audio' ? 'mic' : 'videocam';
+        updateBtnState(btn, config[type], iconName);
+    }
+
+    function updateBtnState(btn, isActive, iconName) {
+        const icon = btn.querySelector('.icon');
+        if(isActive) {
+            btn.classList.add('active');
+            btn.style.color = '';
+            icon.innerText = iconName;
+        } else {
+            btn.classList.remove('active');
+            btn.style.color = 'var(--danger)';
+            icon.innerText = iconName + '_off';
+        }
+    }
+
+    // --- 5. EXTRAS ---
+    function copyInvite() {
+        const link = `${window.location.origin}${window.location.pathname}?join=${myId}`;
+        navigator.clipboard.writeText(link);
+        showToast("Link Copied!");
+    }
+
+    function showToast(msg) {
+        const t = document.getElementById('toast');
+        t.innerText = msg;
+        t.classList.add('show');
+        setTimeout(() => t.classList.remove('show'), 2000);
+    }
+
+    function toggleSidebar() {
+        document.getElementById('sidebar').classList.toggle('open');
+    }
+
+    function sendChat(e) {
+        if(e.key === 'Enter') {
+            const val = e.target.value;
+            if(!val) return;
+            const div = document.createElement('div');
+            div.className = 'chat-msg';
+            div.innerHTML = `<strong style="color:var(--primary)">You:</strong> ${val}`;
+            document.getElementById('chat-feed').appendChild(div);
+            e.target.value = '';
+            // Note: Data connection for chat needs generic PeerJS data implementation (omitted for brevity in this UI focused update)
+        }
+    }
+    
+    async function shareScreen() {
+        try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({video:true});
+            addVideoCard(stream, true, "Your Screen", "screen-share");
+            // Note: Actual screen share broadcasting requires re-negotiating connection or 2nd peer call
+        } catch(e) {}
+    }
+    
+    function toggleLayout() {
+        document.getElementById('grid').style.gridTemplateColumns = 
+            document.getElementById('grid').style.gridTemplateColumns === '1fr' ? 'repeat(auto-fit, minmax(320px, 1fr))' : '1fr';
+    }
+</script>
+</body>
+</html>
