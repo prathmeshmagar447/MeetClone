@@ -268,7 +268,9 @@
     const peer = new Peer();
     let myStream;
     let myId;
+    let username;
     let peers = {};
+    let chatConns = {};
     let config = { audio: true, video: true };
     
     // --- CLOCK ---
@@ -316,23 +318,36 @@
 
     // --- 2. JOIN MEETING ---
     function joinMeeting() {
-        const name = document.getElementById('username').value || 'User';
+        username = document.getElementById('username').value || 'User';
         const code = document.getElementById('code-input').value.trim();
 
         document.getElementById('lobby-layer').style.display = 'none';
         document.getElementById('app-layer').style.display = 'flex';
-        
+
         // Add Self
-        addVideoCard(myStream, true, name, 'local');
+        addVideoCard(myStream, true, username, 'local');
         syncDockButtons(); // Ensure App buttons match Lobby choice
+
+        // Handle incoming chat connections
+        peer.on('connection', conn => {
+            chatConns[conn.peer] = conn;
+            conn.on('open', () => {
+                console.log('Chat connection open with', conn.peer);
+            });
+            conn.on('data', data => {
+                if (data.type === 'chat') {
+                    receiveChat(data.name, data.msg);
+                }
+            });
+        });
 
         if(!myId) {
             peer.on('open', id => {
                 myId = id;
-                if(code) connectToPeer(code, name);
+                if(code) connectToPeer(code);
             });
         } else {
-            if(code) connectToPeer(code, name);
+            if(code) connectToPeer(code);
         }
     }
 
@@ -344,8 +359,8 @@
         handleCall(call);
     });
 
-    function connectToPeer(id, name) {
-        const call = peer.call(id, myStream, { metadata: { name: name } });
+    function connectToPeer(id) {
+        const call = peer.call(id, myStream, { metadata: { name: username } });
         handleCall(call);
     }
 
@@ -355,12 +370,33 @@
                 peers[call.peer] = call;
                 const name = call.metadata?.name || "Participant";
                 addVideoCard(remoteStream, false, name, call.peer);
+                establishChatConn(call.peer);
             }
         });
         call.on('close', () => {
             document.getElementById(`card-${call.peer}`).remove();
             delete peers[call.peer];
+            delete chatConns[call.peer];
         });
+    }
+
+    function establishChatConn(peerId) {
+        const conn = peer.connect(peerId);
+        conn.on('open', () => {
+            chatConns[peerId] = conn;
+        });
+        conn.on('data', data => {
+            if (data.type === 'chat') {
+                receiveChat(data.name, data.msg);
+            }
+        });
+    }
+
+    function receiveChat(senderName, msg) {
+        const div = document.createElement('div');
+        div.className = 'chat-msg';
+        div.innerHTML = `<strong style="color:var(--success)">${senderName}:</strong> ${msg}`;
+        document.getElementById('chat-feed').appendChild(div);
     }
 
     // --- 4. UI FUNCTIONS ---
@@ -432,12 +468,16 @@
         if(e.key === 'Enter') {
             const val = e.target.value;
             if(!val) return;
+            // Display locally
             const div = document.createElement('div');
             div.className = 'chat-msg';
             div.innerHTML = `<strong style="color:var(--primary)">You:</strong> ${val}`;
             document.getElementById('chat-feed').appendChild(div);
+            // Send to peers
+            for (let connKey in chatConns) {
+                chatConns[connKey].send({ type: 'chat', name: username, msg: val });
+            }
             e.target.value = '';
-            // Note: Data connection for chat needs generic PeerJS data implementation (omitted for brevity in this UI focused update)
         }
     }
     
