@@ -58,6 +58,7 @@
             border-radius: 16px; overflow: hidden; margin-bottom: 24px;
             position: relative;
         }
+        /* Mirrored for natural feel */
         .lobby-preview video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
         
         .lobby-controls {
@@ -109,7 +110,8 @@
             aspect-ratio: 16/9; transition: all 0.3s ease;
         }
         .user-card video { width: 100%; height: 100%; object-fit: cover; }
-        .user-card.local video { transform: scaleX(-1); }
+        /* Only mirror local webcam, not local screenshare */
+        .user-card.local-webcam video { transform: scaleX(-1); }
 
         .user-info {
             position: absolute; bottom: 16px; left: 16px;
@@ -156,11 +158,14 @@
             transform: translateX(120%); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             display: flex; flex-direction: column; z-index: 15;
         }
+        /* Mobile adjustment */
+        @media (max-width: 500px) { .sidebar { width: 90%; right: 5%; } }
+
         .sidebar.open { transform: translateX(0); }
         
         .sidebar-header { padding: 16px; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center; }
         .chat-area { flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-        .chat-msg { background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; font-size: 0.9rem; }
+        .chat-msg { background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; font-size: 0.9rem; word-break: break-word; }
         .chat-input-wrap { padding: 16px; border-top: 1px solid var(--glass-border); }
 
         /* Toast */
@@ -198,6 +203,9 @@
             
             <button class="btn-primary" onclick="joinMeeting()">
                 Join Meeting <span class="icon">arrow_forward</span>
+            </button>
+            <button class="btn-primary" style="background: var(--success); margin-top: 10px;" onclick="createMeetingLink()">
+                Create Meeting Link <span class="icon">link</span>
             </button>
         </div>
     </div>
@@ -265,13 +273,25 @@
 
 <script>
     // --- STATE ---
-    const peer = new Peer();
+    const peer = new Peer({
+        host: 'peerjs-server-prathmeshmagar447.vercel.app',
+        port: 443,
+        path: '/api',
+        secure: true,
+        config: {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        }
+    });
     let myStream;
     let myId;
     let username;
-    let peers = {};
-    let chatConns = {};
+    let peers = {}; // Stores video calls
+    let chatConns = {}; // Stores data connections
     let config = { audio: true, video: true };
+    let screenStream = null;
     
     // --- CLOCK ---
     setInterval(() => {
@@ -284,7 +304,6 @@
             myStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             document.getElementById('lobbyVid').srcObject = myStream;
             
-            // Auto-fill code from URL
             const urlParams = new URLSearchParams(window.location.search);
             if(urlParams.get('join')) document.getElementById('code-input').value = urlParams.get('join');
             
@@ -297,11 +316,9 @@
     function toggleLobby(type) {
         config[type] = !config[type];
         
-        // Track
         const track = type === 'audio' ? myStream.getAudioTracks()[0] : myStream.getVideoTracks()[0];
-        track.enabled = config[type];
+        if(track) track.enabled = config[type];
         
-        // UI
         const btn = document.getElementById(`btn-lobby-${type === 'audio' ? 'mic' : 'cam'}`);
         const icon = btn.querySelector('.icon');
         
@@ -316,6 +333,13 @@
         }
     }
 
+    // --- CREATE MEETING LINK ---
+    function createMeetingLink() {
+        const meetingId = myId || 'meet-' + Math.random().toString(36).substr(2, 9);
+        const link = window.location.origin + window.location.pathname + `?join=${meetingId}`;
+        prompt("Copy this link:", link);
+    }
+
     // --- 2. JOIN MEETING ---
     function joinMeeting() {
         username = document.getElementById('username').value || 'User';
@@ -324,20 +348,15 @@
         document.getElementById('lobby-layer').style.display = 'none';
         document.getElementById('app-layer').style.display = 'flex';
 
-        // Add Self
-        addVideoCard(myStream, true, username, 'local');
-        syncDockButtons(); // Ensure App buttons match Lobby choice
+        // Add Self (Webcam)
+        addVideoCard(myStream, true, username, 'local-webcam');
+        syncDockButtons();
 
         // Handle incoming chat connections
         peer.on('connection', conn => {
             chatConns[conn.peer] = conn;
-            conn.on('open', () => {
-                console.log('Chat connection open with', conn.peer);
-            });
             conn.on('data', data => {
-                if (data.type === 'chat') {
-                    receiveChat(data.name, data.msg);
-                }
+                if (data.type === 'chat') receiveChat(data.name, data.msg);
             });
         });
 
@@ -355,40 +374,60 @@
     peer.on('open', id => myId = id);
     
     peer.on('call', call => {
+        // Answer incoming calls
+        // If it's a screen share, we answer with audio-only or empty to save bandwidth, 
+        // but simple answer(myStream) works too.
         call.answer(myStream);
         handleCall(call);
     });
 
     function connectToPeer(id) {
-        const call = peer.call(id, myStream, { metadata: { name: username } });
+        // Call for video
+        const call = peer.call(id, myStream, { metadata: { name: username, type: 'video' } });
         handleCall(call);
+        // Connect for chat
+        establishChatConn(id);
     }
 
     function handleCall(call) {
+        // Determine if this is a screen share based on metadata
+        const isScreenShare = call.metadata && call.metadata.type === 'screen';
+        
         call.on('stream', remoteStream => {
-            if(!peers[call.peer]) {
-                peers[call.peer] = call;
+            // Create a unique ID for the card: 
+            // If it's a screen share, append '-screen' to the peerId
+            const cardId = isScreenShare ? `${call.peer}-screen` : call.peer;
+
+            // Only add if card doesn't exist yet
+            if (!document.getElementById(`card-${cardId}`)) {
+                // Track main video calls in 'peers' for future screen sharing broadcast
+                if (!isScreenShare) peers[call.peer] = call; 
+                
                 const name = call.metadata?.name || "Participant";
-                addVideoCard(remoteStream, false, name, call.peer);
-                establishChatConn(call.peer);
+                addVideoCard(remoteStream, false, name, cardId);
             }
         });
+
         call.on('close', () => {
-            document.getElementById(`card-${call.peer}`).remove();
-            delete peers[call.peer];
-            delete chatConns[call.peer];
+            const isScreen = call.metadata && call.metadata.type === 'screen';
+            const cardId = isScreen ? `${call.peer}-screen` : call.peer;
+            
+            const card = document.getElementById(`card-${cardId}`);
+            if(card) card.remove();
+            
+            if(!isScreen) {
+                delete peers[call.peer];
+                delete chatConns[call.peer];
+            }
         });
     }
 
     function establishChatConn(peerId) {
+        if(chatConns[peerId]) return;
         const conn = peer.connect(peerId);
-        conn.on('open', () => {
-            chatConns[peerId] = conn;
-        });
+        conn.on('open', () => chatConns[peerId] = conn);
         conn.on('data', data => {
-            if (data.type === 'chat') {
-                receiveChat(data.name, data.msg);
-            }
+            if (data.type === 'chat') receiveChat(data.name, data.msg);
         });
     }
 
@@ -396,13 +435,17 @@
         const div = document.createElement('div');
         div.className = 'chat-msg';
         div.innerHTML = `<strong style="color:var(--success)">${senderName}:</strong> ${msg}`;
-        document.getElementById('chat-feed').appendChild(div);
+        const feed = document.getElementById('chat-feed');
+        feed.appendChild(div);
+        feed.scrollTop = feed.scrollHeight;
     }
 
     // --- 4. UI FUNCTIONS ---
     function addVideoCard(stream, isLocal, name, id) {
         const div = document.createElement('div');
-        div.className = `user-card ${isLocal ? 'local' : ''}`;
+        // Add 'local-webcam' class if it is the local user's camera (for mirroring)
+        // If it is 'local-screen', we do NOT add that class (no mirroring for text)
+        div.className = `user-card ${id === 'local-webcam' ? 'local-webcam' : ''}`;
         div.id = `card-${id}`;
         div.innerHTML = `
             <video autoplay playsinline ${isLocal ? 'muted' : ''}></video>
@@ -416,18 +459,14 @@
     }
 
     function syncDockButtons() {
-        // Apply lobby choices to dock
         const micBtn = document.getElementById('btn-mic');
         const camBtn = document.getElementById('btn-cam');
-        
         updateBtnState(micBtn, config.audio, 'mic');
         updateBtnState(camBtn, config.video, 'videocam');
     }
 
     function toggleMedia(type) {
-        toggleLobby(type); // Reuse logic (updates track + config)
-        
-        // Update Dock UI
+        toggleLobby(type); // Reuse logic
         const btn = document.getElementById(`btn-${type === 'audio' ? 'mic' : 'cam'}`);
         const iconName = type === 'audio' ? 'mic' : 'videocam';
         updateBtnState(btn, config[type], iconName);
@@ -448,7 +487,7 @@
 
     // --- 5. EXTRAS ---
     function copyInvite() {
-        const link = `${window.location.origin}${window.location.pathname}?join=${myId}`;
+        const link = window.location.origin + window.location.pathname + `?join=${myId}`;
         navigator.clipboard.writeText(link);
         showToast("Link Copied!");
     }
@@ -468,12 +507,13 @@
         if(e.key === 'Enter') {
             const val = e.target.value;
             if(!val) return;
-            // Display locally
             const div = document.createElement('div');
             div.className = 'chat-msg';
             div.innerHTML = `<strong style="color:var(--primary)">You:</strong> ${val}`;
-            document.getElementById('chat-feed').appendChild(div);
-            // Send to peers
+            const feed = document.getElementById('chat-feed');
+            feed.appendChild(div);
+            feed.scrollTop = feed.scrollHeight;
+            
             for (let connKey in chatConns) {
                 chatConns[connKey].send({ type: 'chat', name: username, msg: val });
             }
@@ -483,23 +523,48 @@
     
     async function shareScreen() {
         try {
-            const stream = await navigator.mediaDevices.getDisplayMedia({video:{mediaSource:'screen'}, audio:true});
-            const screenStream = stream;
-            addVideoCard(screenStream, true, "Your Screen", "screen-share");
-
-            // Broadcast screen share to peers
-            for (let peerId in peers) {
-                const screenCall = peer.call(peerId, screenStream, { metadata: { name: "Screen Share", type: "screen" } });
-                // Store the screen call if needed, but for simplicity, let it run
+            if (screenStream) {
+                // Stop screen share
+                screenStream.getTracks().forEach(track => track.stop());
+                screenStream = null;
+                document.getElementById('card-local-screen').remove();
+                document.getElementById('btn-screen').classList.remove('active');
+                return;
             }
+
+            const stream = await navigator.mediaDevices.getDisplayMedia({video:{mediaSource:'screen'}, audio:true});
+            screenStream = stream;
+            
+            // Add Local Screen
+            addVideoCard(screenStream, true, "Your Screen", "local-screen");
+            document.getElementById('btn-screen').classList.add('active');
+
+            // Handle Stop via Browser UI
+            screenStream.getVideoTracks()[0].onended = () => {
+                screenStream = null;
+                const card = document.getElementById('card-local-screen');
+                if(card) card.remove();
+                document.getElementById('btn-screen').classList.remove('active');
+            };
+
+            // Broadcast to all existing peers
+            for (let peerId in peers) {
+                // Important: Metadata tags this as a 'screen' call
+                peer.call(peerId, screenStream, { 
+                    metadata: { name: username + "'s Screen", type: 'screen' } 
+                });
+            }
+
         } catch(e) {
-            console.log('Screen share cancelled or failed');
+            console.log('Screen share cancelled');
         }
     }
     
     function toggleLayout() {
-        document.getElementById('grid').style.gridTemplateColumns = 
-            document.getElementById('grid').style.gridTemplateColumns === '1fr' ? 'repeat(auto-fit, minmax(320px, 1fr))' : '1fr';
+        const grid = document.getElementById('grid');
+        grid.style.gridTemplateColumns = grid.style.gridTemplateColumns === '1fr' 
+            ? 'repeat(auto-fit, minmax(320px, 1fr))' 
+            : '1fr';
     }
 </script>
 </body>
